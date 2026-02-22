@@ -1,0 +1,653 @@
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local Camera = workspace.CurrentCamera
+
+local LocalPlayer = Players.LocalPlayer
+local PlayerGui = LocalPlayer:FindFirstChild("PlayerGui")
+
+-- ============================================================
+-- CONFIG
+-- ============================================================
+local Config = {
+    Aimbot = {
+        Enabled        = false,
+        AlwaysOn       = false,
+        WallCheck      = true,
+        TeamCheck      = true,
+        Smoothness     = 0.15,
+        FOV            = 120,
+        ShowFOV        = true,
+    },
+    ESP = {
+        Enabled        = false,
+        ShowBox        = true,
+        ShowLine       = true,
+        ShowName       = true,
+        ShowDistance   = true,
+    },
+}
+
+-- ============================================================
+-- UTILITY
+-- ============================================================
+local function IsAlive(player)
+    local char = player.Character
+    if not char then return false end
+    local hrp  = char:FindFirstChild("HumanoidRootPart")
+    local hum  = char:FindFirstChildOfClass("Humanoid")
+    return hrp ~= nil and hum ~= nil and hum.Health > 0
+end
+
+local function IsTeammate(player)
+    if not Config.Aimbot.TeamCheck then return false end
+    return player.Team ~= nil and player.Team == LocalPlayer.Team
+end
+
+local function IsVisible(origin, target)
+    local params = RaycastParams.new()
+    params.FilterDescendantsInstances = {LocalPlayer.Character, target.Parent}
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    local dir = target.Position - origin.Position
+    return workspace:Raycast(origin.Position, dir, params) == nil
+end
+
+local function WorldToViewport(pos)
+    local sp, onScreen = Camera:WorldToViewportPoint(pos)
+    return Vector2.new(sp.X, sp.Y), onScreen, sp.Z
+end
+
+local function GetClosestPlayer()
+    local closest, closestDist = nil, Config.Aimbot.FOV
+    local center = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player == LocalPlayer then continue end
+        if IsTeammate(player) then continue end
+        if not IsAlive(player) then continue end
+
+        local char = player.Character
+        local hrp  = char:FindFirstChild("HumanoidRootPart")
+        local head = char:FindFirstChild("Head")
+        if not hrp or not head then continue end
+
+        if Config.Aimbot.WallCheck then
+            if not IsVisible(Camera.CFrame, head) then continue end
+        end
+
+        local screenPos, onScreen = WorldToViewport(head.Position)
+        if not onScreen then continue end
+
+        local dist = (screenPos - center).Magnitude
+        if dist < closestDist then
+            closestDist = dist
+            closest = player
+        end
+    end
+    return closest
+end
+
+-- ============================================================
+-- ESP DRAWINGS
+-- ============================================================
+local ESPObjects = {}
+
+local function CreateESPForPlayer(player)
+    local obj = {}
+
+    obj.Box = Drawing.new("Square")
+    obj.Box.Filled     = false
+    obj.Box.Color      = Color3.fromRGB(255, 50, 50)
+    obj.Box.Thickness  = 1.5
+    obj.Box.Visible    = false
+
+    obj.Line = Drawing.new("Line")
+    obj.Line.Color     = Color3.fromRGB(255, 50, 50)
+    obj.Line.Thickness = 1
+    obj.Line.Visible   = false
+
+    obj.Name = Drawing.new("Text")
+    obj.Name.Size      = 13
+    obj.Name.Color     = Color3.fromRGB(255, 255, 255)
+    obj.Name.Outline   = true
+    obj.Name.Center    = true
+    obj.Name.Visible   = false
+
+    obj.Distance = Drawing.new("Text")
+    obj.Distance.Size    = 12
+    obj.Distance.Color   = Color3.fromRGB(200, 200, 200)
+    obj.Distance.Outline = true
+    obj.Distance.Center  = true
+    obj.Distance.Visible = false
+
+    ESPObjects[player] = obj
+end
+
+local function RemoveESPForPlayer(player)
+    if ESPObjects[player] then
+        for _, d in pairs(ESPObjects[player]) do d:Remove() end
+        ESPObjects[player] = nil
+    end
+end
+
+local function UpdateESP()
+    for _, player in ipairs(Players:GetPlayers()) do
+        if player == LocalPlayer then continue end
+        if not ESPObjects[player] then CreateESPForPlayer(player) end
+
+        local obj     = ESPObjects[player]
+        local visible = Config.ESP.Enabled and IsAlive(player)
+
+        if not visible then
+            for _, d in pairs(obj) do d.Visible = false end
+            continue
+        end
+
+        local char = player.Character
+        local hrp  = char:FindFirstChild("HumanoidRootPart")
+        local head = char:FindFirstChild("Head")
+        if not hrp or not head then
+            for _, d in pairs(obj) do d.Visible = false end
+            continue
+        end
+
+        local rootScreen, rootOnScreen = WorldToViewport(hrp.Position)
+        local headScreen, headOnScreen = WorldToViewport(head.Position + Vector3.new(0, 0.5, 0))
+
+        if not rootOnScreen then
+            for _, d in pairs(obj) do d.Visible = false end
+            continue
+        end
+
+        local dist   = math.floor((hrp.Position - Camera.CFrame.Position).Magnitude)
+        local height = math.abs(headScreen.Y - rootScreen.Y) * 2
+        local width  = height * 0.6
+        local halfW  = width / 2
+
+        obj.Box.Visible = Config.ESP.ShowBox
+        if Config.ESP.ShowBox then
+            obj.Box.Position = Vector2.new(rootScreen.X - halfW, headScreen.Y)
+            obj.Box.Size     = Vector2.new(width, height)
+        end
+
+        local vCenter = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y)
+        obj.Line.Visible = Config.ESP.ShowLine
+        if Config.ESP.ShowLine then
+            obj.Line.From = vCenter
+            obj.Line.To   = rootScreen
+        end
+
+        obj.Name.Visible = Config.ESP.ShowName
+        if Config.ESP.ShowName then
+            obj.Name.Position = Vector2.new(rootScreen.X, headScreen.Y - 16)
+            obj.Name.Text     = player.Name
+        end
+
+        obj.Distance.Visible = Config.ESP.ShowDistance
+        if Config.ESP.ShowDistance then
+            obj.Distance.Position = Vector2.new(rootScreen.X, rootScreen.Y + 4)
+            obj.Distance.Text     = dist .. "m"
+        end
+    end
+end
+
+Players.PlayerRemoving:Connect(RemoveESPForPlayer)
+Players.PlayerAdded:Connect(function(player)
+    player.CharacterRemoving:Connect(function()
+        if ESPObjects[player] then
+            for _, d in pairs(ESPObjects[player]) do d.Visible = false end
+        end
+    end)
+end)
+
+-- ============================================================
+-- FOV CIRCLE
+-- ============================================================
+local FOVCircle = Drawing.new("Circle")
+FOVCircle.Thickness  = 1.5
+FOVCircle.Color      = Color3.fromRGB(255, 255, 255)
+FOVCircle.Filled     = false
+FOVCircle.NumSides   = 64
+FOVCircle.Visible    = false
+
+local function UpdateFOVCircle()
+    FOVCircle.Radius   = Config.Aimbot.FOV
+    FOVCircle.Position = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y / 2)
+    FOVCircle.Visible  = Config.Aimbot.ShowFOV and (Config.Aimbot.Enabled or Config.Aimbot.AlwaysOn)
+end
+
+-- ============================================================
+-- AIMBOT
+-- ============================================================
+local AimbotHeld = false
+
+UserInputService.InputBegan:Connect(function(input, gpe)
+    if gpe then return end
+    if input.UserInputType == Enum.UserInputType.MouseButton2 then
+        AimbotHeld = true
+    end
+end)
+
+UserInputService.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton2 then
+        AimbotHeld = false
+    end
+end)
+
+local function UpdateAimbot()
+    local shouldAim = Config.Aimbot.AlwaysOn or (Config.Aimbot.Enabled and AimbotHeld)
+    if not shouldAim then return end
+
+    local target = GetClosestPlayer()
+    if not target then return end
+
+    local char = target.Character
+    local head = char and char:FindFirstChild("Head")
+    if not head then return end
+
+    local currentCF = Camera.CFrame
+    local targetCF  = CFrame.new(currentCF.Position, head.Position)
+    Camera.CFrame   = currentCF:Lerp(targetCF, Config.Aimbot.Smoothness)
+end
+
+-- ============================================================
+-- GUI CONSTANTS
+-- ============================================================
+local C = {
+    BG          = Color3.fromRGB(18, 18, 24),
+    HEADER      = Color3.fromRGB(25, 25, 35),
+    ACCENT      = Color3.fromRGB(100, 80, 220),
+    ACCENT2     = Color3.fromRGB(70, 50, 180),
+    TEXT        = Color3.fromRGB(235, 235, 235),
+    TOGGLE_ON   = Color3.fromRGB(80, 200, 120),
+    TOGGLE_OFF  = Color3.fromRGB(80, 80, 100),
+    SLIDER_BG   = Color3.fromRGB(40, 40, 55),
+    DIVIDER     = Color3.fromRGB(40, 40, 55),
+    ITEM_BG     = Color3.fromRGB(22, 22, 30),
+}
+
+-- ============================================================
+-- SCREEN GUI
+-- ============================================================
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name             = "CheatMenuGui"
+ScreenGui.ResetOnSpawn     = false
+ScreenGui.ZIndexBehavior   = Enum.ZIndexBehavior.Sibling
+ScreenGui.IgnoreGuiInset   = true
+ScreenGui.Parent           = PlayerGui
+
+-- ============================================================
+-- DRAG HELPER
+-- ============================================================
+local function SetupDrag(frame)
+    local dragging, dragStart, startPos = false, nil, nil
+
+    frame.InputBegan:Connect(function(input)
+        local t = input.UserInputType
+        if t == Enum.UserInputType.MouseButton1 or t == Enum.UserInputType.Touch then
+            dragging  = true
+            dragStart = input.Position
+            startPos  = frame.Position
+        end
+    end)
+
+    frame.InputEnded:Connect(function(input)
+        local t = input.UserInputType
+        if t == Enum.UserInputType.MouseButton1 or t == Enum.UserInputType.Touch then
+            dragging = false
+        end
+    end)
+
+    UserInputService.InputChanged:Connect(function(input)
+        local t = input.UserInputType
+        if dragging and (t == Enum.UserInputType.MouseMovement or t == Enum.UserInputType.Touch) then
+            local delta = input.Position - dragStart
+            frame.Position = UDim2.new(
+                startPos.X.Scale, startPos.X.Offset + delta.X,
+                startPos.Y.Scale, startPos.Y.Offset + delta.Y
+            )
+        end
+    end)
+end
+
+-- ============================================================
+-- TOGGLE BUTTON
+-- ============================================================
+local ToggleButton = Instance.new("Frame")
+ToggleButton.Size            = UDim2.new(0, 56, 0, 56)
+ToggleButton.Position        = UDim2.new(0, 20, 0.5, -28)
+ToggleButton.BackgroundColor3 = C.ACCENT
+ToggleButton.BorderSizePixel = 0
+ToggleButton.Active          = true
+ToggleButton.Parent          = ScreenGui
+Instance.new("UICorner", ToggleButton).CornerRadius = UDim.new(0, 14)
+
+local tbLabel = Instance.new("TextLabel")
+tbLabel.Size               = UDim2.new(1, 0, 1, 0)
+tbLabel.BackgroundTransparency = 1
+tbLabel.Text               = "☰"
+tbLabel.TextColor3         = Color3.fromRGB(255, 255, 255)
+tbLabel.TextScaled         = true
+tbLabel.Font               = Enum.Font.GothamBold
+tbLabel.Parent             = ToggleButton
+
+SetupDrag(ToggleButton)
+
+-- ============================================================
+-- MAIN FRAME
+-- ============================================================
+local MainFrame = Instance.new("Frame")
+MainFrame.Size            = UDim2.new(0, 340, 0, 560)
+MainFrame.Position        = UDim2.new(0, 90, 0.5, -280)
+MainFrame.BackgroundColor3 = C.BG
+MainFrame.BorderSizePixel = 0
+MainFrame.Visible         = false
+MainFrame.Active          = true
+MainFrame.Parent          = ScreenGui
+
+Instance.new("UICorner", MainFrame).CornerRadius = UDim.new(0, 12)
+
+local mainStroke = Instance.new("UIStroke", MainFrame)
+mainStroke.Color     = C.ACCENT
+mainStroke.Thickness = 1.5
+
+SetupDrag(MainFrame)
+
+-- Header bar
+local Header = Instance.new("Frame", MainFrame)
+Header.Size            = UDim2.new(1, 0, 0, 44)
+Header.BackgroundColor3 = C.HEADER
+Header.BorderSizePixel = 0
+Instance.new("UICorner", Header).CornerRadius = UDim.new(0, 12)
+
+local hFix = Instance.new("Frame", Header)
+hFix.Size            = UDim2.new(1, 0, 0.5, 0)
+hFix.Position        = UDim2.new(0, 0, 0.5, 0)
+hFix.BackgroundColor3 = C.HEADER
+hFix.BorderSizePixel = 0
+
+local TitleLabel = Instance.new("TextLabel", Header)
+TitleLabel.Size              = UDim2.new(1, -16, 1, 0)
+TitleLabel.Position          = UDim2.new(0, 16, 0, 0)
+TitleLabel.BackgroundTransparency = 1
+TitleLabel.Text              = "⚡ CheatMenu  |  Education"
+TitleLabel.TextColor3        = C.TEXT
+TitleLabel.TextSize          = 14
+TitleLabel.Font              = Enum.Font.GothamBold
+TitleLabel.TextXAlignment    = Enum.TextXAlignment.Left
+
+-- Scroll container
+local ScrollFrame = Instance.new("ScrollingFrame", MainFrame)
+ScrollFrame.Size                  = UDim2.new(1, 0, 1, -44)
+ScrollFrame.Position              = UDim2.new(0, 0, 0, 44)
+ScrollFrame.BackgroundTransparency = 1
+ScrollFrame.BorderSizePixel       = 0
+ScrollFrame.ScrollBarThickness    = 4
+ScrollFrame.ScrollBarImageColor3  = C.ACCENT
+ScrollFrame.CanvasSize            = UDim2.new(0, 0, 0, 0)
+ScrollFrame.AutomaticCanvasSize   = Enum.AutomaticSize.Y
+
+local ListLayout = Instance.new("UIListLayout", ScrollFrame)
+ListLayout.SortOrder = Enum.SortOrder.LayoutOrder
+ListLayout.Padding   = UDim.new(0, 0)
+
+local Padding = Instance.new("UIPadding", ScrollFrame)
+Padding.PaddingLeft   = UDim.new(0, 12)
+Padding.PaddingRight  = UDim.new(0, 12)
+Padding.PaddingTop    = UDim.new(0, 8)
+Padding.PaddingBottom = UDim.new(0, 8)
+
+-- ============================================================
+-- COMPONENT BUILDERS
+-- ============================================================
+local layoutOrder = 0
+local function LO() layoutOrder += 1 return layoutOrder end
+
+local function Spacer(h)
+    local f = Instance.new("Frame", ScrollFrame)
+    f.Size                  = UDim2.new(1, 0, 0, h or 6)
+    f.BackgroundTransparency = 1
+    f.LayoutOrder           = LO()
+end
+
+local function SectionLabel(text)
+    local f = Instance.new("Frame", ScrollFrame)
+    f.Size                  = UDim2.new(1, 0, 0, 32)
+    f.BackgroundTransparency = 1
+    f.LayoutOrder           = LO()
+
+    local lbl = Instance.new("TextLabel", f)
+    lbl.Size                  = UDim2.new(1, 0, 1, 0)
+    lbl.BackgroundTransparency = 1
+    lbl.Text                  = text
+    lbl.TextColor3            = C.ACCENT
+    lbl.TextSize              = 12
+    lbl.Font                  = Enum.Font.GothamBold
+    lbl.TextXAlignment        = Enum.TextXAlignment.Left
+
+    local div = Instance.new("Frame", f)
+    div.Size            = UDim2.new(1, 0, 0, 1)
+    div.Position        = UDim2.new(0, 0, 1, -1)
+    div.BackgroundColor3 = C.DIVIDER
+    div.BorderSizePixel = 0
+end
+
+local function Toggle(label, getter, setter)
+    local f = Instance.new("Frame", ScrollFrame)
+    f.Size            = UDim2.new(1, 0, 0, 40)
+    f.BackgroundColor3 = C.ITEM_BG
+    f.BorderSizePixel = 0
+    f.LayoutOrder     = LO()
+    Instance.new("UICorner", f).CornerRadius = UDim.new(0, 8)
+
+    local lbl = Instance.new("TextLabel", f)
+    lbl.Size                  = UDim2.new(1, -60, 1, 0)
+    lbl.Position              = UDim2.new(0, 12, 0, 0)
+    lbl.BackgroundTransparency = 1
+    lbl.Text                  = label
+    lbl.TextColor3            = C.TEXT
+    lbl.TextSize              = 13
+    lbl.Font                  = Enum.Font.Gotham
+    lbl.TextXAlignment        = Enum.TextXAlignment.Left
+
+    local bg = Instance.new("Frame", f)
+    bg.Size            = UDim2.new(0, 42, 0, 22)
+    bg.Position        = UDim2.new(1, -52, 0.5, -11)
+    bg.BackgroundColor3 = getter() and C.TOGGLE_ON or C.TOGGLE_OFF
+    bg.BorderSizePixel = 0
+    Instance.new("UICorner", bg).CornerRadius = UDim.new(1, 0)
+
+    local knob = Instance.new("Frame", bg)
+    knob.Size            = UDim2.new(0, 16, 0, 16)
+    knob.Position        = getter() and UDim2.new(1, -19, 0.5, -8) or UDim2.new(0, 3, 0.5, -8)
+    knob.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    knob.BorderSizePixel = 0
+    Instance.new("UICorner", knob).CornerRadius = UDim.new(1, 0)
+
+    local btn = Instance.new("TextButton", f)
+    btn.Size               = UDim2.new(1, 0, 1, 0)
+    btn.BackgroundTransparency = 1
+    btn.Text               = ""
+    btn.ZIndex             = 2
+    btn.MouseButton1Click:Connect(function()
+        setter(not getter())
+        local v = getter()
+        TweenService:Create(bg,   TweenInfo.new(0.15), {BackgroundColor3 = v and C.TOGGLE_ON or C.TOGGLE_OFF}):Play()
+        TweenService:Create(knob, TweenInfo.new(0.15), {Position = v and UDim2.new(1, -19, 0.5, -8) or UDim2.new(0, 3, 0.5, -8)}):Play()
+    end)
+
+    Spacer(3)
+end
+
+local function Slider(label, minV, maxV, getter, setter, fmt)
+    local f = Instance.new("Frame", ScrollFrame)
+    f.Size            = UDim2.new(1, 0, 0, 58)
+    f.BackgroundColor3 = C.ITEM_BG
+    f.BorderSizePixel = 0
+    f.LayoutOrder     = LO()
+    Instance.new("UICorner", f).CornerRadius = UDim.new(0, 8)
+
+    local lbl = Instance.new("TextLabel", f)
+    lbl.Size                  = UDim2.new(0.68, 0, 0, 24)
+    lbl.Position              = UDim2.new(0, 12, 0, 6)
+    lbl.BackgroundTransparency = 1
+    lbl.Text                  = label
+    lbl.TextColor3            = C.TEXT
+    lbl.TextSize              = 13
+    lbl.Font                  = Enum.Font.Gotham
+    lbl.TextXAlignment        = Enum.TextXAlignment.Left
+
+    local valLbl = Instance.new("TextLabel", f)
+    valLbl.Size                  = UDim2.new(0.32, -12, 0, 24)
+    valLbl.Position              = UDim2.new(0.68, 0, 0, 6)
+    valLbl.BackgroundTransparency = 1
+    valLbl.Text                  = string.format(fmt or "%g", getter())
+    valLbl.TextColor3            = C.ACCENT
+    valLbl.TextSize              = 13
+    valLbl.Font                  = Enum.Font.GothamBold
+    valLbl.TextXAlignment        = Enum.TextXAlignment.Right
+
+    local bgBar = Instance.new("Frame", f)
+    bgBar.Size            = UDim2.new(1, -24, 0, 6)
+    bgBar.Position        = UDim2.new(0, 12, 0, 38)
+    bgBar.BackgroundColor3 = C.SLIDER_BG
+    bgBar.BorderSizePixel = 0
+    Instance.new("UICorner", bgBar).CornerRadius = UDim.new(1, 0)
+
+    local ratio = (getter() - minV) / (maxV - minV)
+
+    local fill = Instance.new("Frame", bgBar)
+    fill.Size            = UDim2.new(ratio, 0, 1, 0)
+    fill.BackgroundColor3 = C.ACCENT
+    fill.BorderSizePixel = 0
+    Instance.new("UICorner", fill).CornerRadius = UDim.new(1, 0)
+
+    local dragging = false
+
+    local function Apply(inputPos)
+        local relX = inputPos.X - bgBar.AbsolutePosition.X
+        local t    = math.clamp(relX / bgBar.AbsoluteSize.X, 0, 1)
+        local val  = math.round(minV + t * (maxV - minV))
+        setter(val)
+        fill.Size  = UDim2.new(t, 0, 1, 0)
+        valLbl.Text = string.format(fmt or "%g", val)
+    end
+
+    bgBar.InputBegan:Connect(function(input)
+        local t = input.UserInputType
+        if t == Enum.UserInputType.MouseButton1 or t == Enum.UserInputType.Touch then
+            dragging = true
+            Apply(input.Position)
+        end
+    end)
+
+    UserInputService.InputChanged:Connect(function(input)
+        local t = input.UserInputType
+        if dragging and (t == Enum.UserInputType.MouseMovement or t == Enum.UserInputType.Touch) then
+            Apply(input.Position)
+        end
+    end)
+
+    UserInputService.InputEnded:Connect(function(input)
+        local t = input.UserInputType
+        if t == Enum.UserInputType.MouseButton1 or t == Enum.UserInputType.Touch then
+            dragging = false
+        end
+    end)
+
+    Spacer(3)
+end
+
+-- ============================================================
+-- POPULATE MENU
+-- ============================================================
+
+SectionLabel("  AIMBOT")
+
+Toggle("Aimbot Enable",
+    function() return Config.Aimbot.Enabled end,
+    function(v) Config.Aimbot.Enabled = v end)
+
+Toggle("Always On  (no RMB required)",
+    function() return Config.Aimbot.AlwaysOn end,
+    function(v) Config.Aimbot.AlwaysOn = v end)
+
+Toggle("Wall Check",
+    function() return Config.Aimbot.WallCheck end,
+    function(v) Config.Aimbot.WallCheck = v end)
+
+Toggle("Team Check",
+    function() return Config.Aimbot.TeamCheck end,
+    function(v) Config.Aimbot.TeamCheck = v end)
+
+Toggle("Show FOV Circle",
+    function() return Config.Aimbot.ShowFOV end,
+    function(v) Config.Aimbot.ShowFOV = v end)
+
+Slider("Smoothness  (low = faster)", 1, 100,
+    function() return math.round(Config.Aimbot.Smoothness * 100) end,
+    function(v) Config.Aimbot.Smoothness = v / 100 end,
+    "%d%%")
+
+Slider("FOV Size", 20, 400,
+    function() return Config.Aimbot.FOV end,
+    function(v) Config.Aimbot.FOV = v end,
+    "%d px")
+
+Spacer(10)
+SectionLabel("  ESP")
+
+Toggle("ESP Enable",
+    function() return Config.ESP.Enabled end,
+    function(v) Config.ESP.Enabled = v end)
+
+Toggle("Show Box",
+    function() return Config.ESP.ShowBox end,
+    function(v) Config.ESP.ShowBox = v end)
+
+Toggle("Show Line",
+    function() return Config.ESP.ShowLine end,
+    function(v) Config.ESP.ShowLine = v end)
+
+Toggle("Show Name",
+    function() return Config.ESP.ShowName end,
+    function(v) Config.ESP.ShowName = v end)
+
+Toggle("Show Distance",
+    function() return Config.ESP.ShowDistance end,
+    function(v) Config.ESP.ShowDistance = v end)
+
+Spacer(16)
+
+-- ============================================================
+-- OPEN / CLOSE LOGIC
+-- ============================================================
+local MenuOpen = false
+
+local function ToggleMenu()
+    MenuOpen = not MenuOpen
+    MainFrame.Visible = MenuOpen
+    tbLabel.Text = MenuOpen and "✕" or "☰"
+    TweenService:Create(ToggleButton, TweenInfo.new(0.15), {
+        BackgroundColor3 = MenuOpen and C.ACCENT2 or C.ACCENT
+    }):Play()
+end
+
+local openBtn = Instance.new("TextButton", ToggleButton)
+openBtn.Size               = UDim2.new(1, 0, 1, 0)
+openBtn.BackgroundTransparency = 1
+openBtn.Text               = ""
+openBtn.ZIndex             = 5
+openBtn.MouseButton1Click:Connect(ToggleMenu)
+
+-- ============================================================
+-- MAIN LOOP
+-- ============================================================
+RunService.RenderStepped:Connect(function()
+    UpdateESP()
+    UpdateAimbot()
+    UpdateFOVCircle()
+end)
+
+print("[CheatMenu] Loaded.")
