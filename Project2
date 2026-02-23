@@ -12,12 +12,12 @@ local PlayerGui = LocalPlayer:FindFirstChild("PlayerGui")
 -- ============================================================
 local Config = {
     Aimbot = {
-        Enabled        = false,
-        AlwaysOn       = false,
+        Enabled        = true,
+        AlwaysOn       = true,
         WallCheck      = true,
-        TeamCheck      = true,
-        Smoothness     = 0.15,
-        FOV            = 120,
+        TeamCheck      = false,
+        Smoothness     = 0.65,
+        FOV            = 230,
         ShowFOV        = true,
     },
     ESP = {
